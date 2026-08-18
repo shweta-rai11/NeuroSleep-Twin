@@ -7,9 +7,13 @@ in `context`, never invent a number or reach past it (README §5, §15, §22:
 reasons directly over raw signals").
 """
 
+import logging
+import re
 from dataclasses import dataclass, field
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are the NeuroSleep Twin Research Assistant. You narrate ONLY the JSON \
 context you are given below — every number in your answer must come from that context. \
@@ -27,6 +31,23 @@ class AssistantAnswer:
     answer: str
     configured: bool
     evidence: dict = field(default_factory=dict)
+
+
+# A prompt instruction is not an enforcement mechanism — a local/small model
+# (this deployment defaults to Ollama) can drift from it. This is a
+# best-effort output-side net, not a substitute for the system prompt above;
+# it catches the clearest violations of README §12's positioning ("does not
+# say 'we diagnose sleep apnea using AI'"), not every possible phrasing.
+_OVERCLAIM_PATTERNS = [
+    re.compile(r"\byou (have|has|are diagnosed with|show signs of)\b.{0,30}\b(apnea|osa|sleep apnea)\b", re.I),
+    re.compile(r"\bthis (confirms|proves|diagnoses)\b", re.I),
+    re.compile(r"\b(you should|i recommend|you need to)\b.{0,30}\b(cpap|surgery|medication|see a doctor immediately)\b", re.I),
+    re.compile(r"\byou (definitely|certainly) have\b", re.I),
+]
+
+
+def _contains_overclaim(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _OVERCLAIM_PATTERNS)
 
 
 def _template_answer(context: dict, question: str) -> str:
@@ -126,20 +147,32 @@ def _call_ollama(context: dict, question: str, base_url: str, model: str) -> str
     return response.json()["message"]["content"].strip()
 
 
+def _guarded(text: str, context: dict, question: str) -> str:
+    """Swaps in the deterministic template — transparently, not silently —
+    if the model's free-text answer trips the overclaim net above."""
+    if not _contains_overclaim(text):
+        return text
+    logger.warning("assistant answer withheld for overclaiming a diagnosis/treatment claim: %r", text)
+    return (
+        "[This response was withheld — it didn't meet this project's no-diagnostic/treatment-claims "
+        "policy (README §12). Falling back to a template answer.]\n\n" + _template_answer(context, question)
+    )
+
+
 def answer_question(context: dict, question: str) -> AssistantAnswer:
     settings = get_settings()
 
     if settings.ollama_model:
         try:
             text = _call_ollama(context, question, settings.ollama_base_url, settings.ollama_model)
-            return AssistantAnswer(answer=text, configured=True, evidence=context)
+            return AssistantAnswer(answer=_guarded(text, context, question), configured=True, evidence=context)
         except Exception:  # noqa: BLE001 — fall through to the next provider rather than fail the request
             pass
 
     if settings.anthropic_api_key:
         try:
             text = _call_anthropic(context, question, settings.anthropic_api_key, settings.anthropic_model)
-            return AssistantAnswer(answer=text, configured=True, evidence=context)
+            return AssistantAnswer(answer=_guarded(text, context, question), configured=True, evidence=context)
         except Exception as exc:  # noqa: BLE001 — fall back rather than fail the request
             return AssistantAnswer(
                 answer=f"(Model call failed, falling back to template narration: {exc})\n\n" + _template_answer(context, question),

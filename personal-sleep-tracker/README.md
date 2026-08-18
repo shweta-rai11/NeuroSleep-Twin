@@ -19,8 +19,9 @@ see a doctor about a real sleep study.
   movement reading 4 times a second
 - **never stores or uploads raw audio** — only a numeric loudness level, so
   there's no recording of what was actually said or heard in the room
-- on "Stop & save," exports a CSV (`sleep-<timestamp>.csv`) via your browser's
-  normal download
+- on "Stop & save," exports **two files**: `sleep-<timestamp>.csv` (the
+  samples) and `sleep-<timestamp>.meta.json` (a sidecar with the sample rate
+  and units) via your browser's normal download
 
 Get it onto your phone one of these ways, then open it directly:
 - **iPhone**: AirDrop `recorder.html` to your phone, open it from Files in
@@ -39,14 +40,42 @@ Before bed: plug the phone in, dim the screen, place it face-up on the
 nightstand (mic side toward you, not under the pillow), hit **Start
 recording**, then just go to sleep. Hit **Stop & save** in the morning.
 
-## 2. Move the file into place
+## 2. Analyze it — two ways
 
-Move the downloaded `sleep-*.csv` into `personal-sleep-tracker/recordings/`
-on this computer (that folder is git-ignored — recordings never get
-committed). It'll show up in the Live Replay viewer's record dropdown
-automatically, under "My recordings."
+You now have both files on your computer. Pick either path (or both — they
+don't conflict):
 
-## 3. Watch it analyzed
+### 2a. The real NeuroSleep Twin app
+
+This runs your recording through the actual production pipeline (Postgres +
+Celery, same as every other study), not a standalone script.
+
+1. Start the real app (see the repo root README's "Getting started").
+2. Open `http://localhost:5173` → **Upload Your Sleep Study**.
+3. Select **both** `sleep-<timestamp>.csv` and `sleep-<timestamp>.meta.json`
+   together (drag both in, or multi-select in the file picker) → **Upload &
+   Analyze**.
+4. On the **Channel Mapping** screen, map `audio_rms` → **resp** (this is
+   what makes the real detector run on it) and, optionally, `motion_mag` →
+   **other** (stored, but no pipeline stage reads it yet — that's a real gap,
+   not a bug: there's no "motion" signal type in the app today). Leave
+   `t_sec` unmapped — it's an inert extra channel, not a real signal.
+5. Confirm the mapping. The **Events** page will show detected candidate
+   events; **Oxygen Burden**, **Brain Response**, and **Autonomic Response**
+   will correctly say "not available" — there's no SpO2/EEG/ECG channel here,
+   and the app never fills those in with invented numbers.
+
+This path was verified end-to-end against the real running backend (upload →
+ingest → channel mapping → detection), including a real pre-existing bug it
+surfaced and got fixed: deleting a study with detected events used to fail
+(`respiratory_events.channel_id` had no `ON DELETE CASCADE`) — see
+`backend/alembic/versions/*_add_ondelete_cascade_*.py`.
+
+### 2b. The standalone Live Replay viewer
+
+Move `sleep-<timestamp>.csv` into `personal-sleep-tracker/recordings/` on
+this computer (that folder is git-ignored — recordings never get committed;
+the `.meta.json` isn't needed here). Then:
 
 ```
 scripts/dev/start_live_demo.sh
@@ -60,6 +89,12 @@ Pick your recording, hit Start. You'll see:
   a movement-response reading, and a fingerprint — with the desaturation,
   hr_response, and arousal axes shown as a hatched **n/a**, not a fake zero,
   because nothing measured them
+- a cardiovascular-risk-context panel citing real published research at
+  whatever severity band your detected-event rate maps to — population
+  context, not a personal score
+
+This path is faster to iterate on and doesn't need Postgres/Redis running,
+but nothing here is saved into the real app's database.
 
 ## What this can and can't tell you
 
@@ -77,12 +112,25 @@ respiratory-effort belt signal, not room audio — treat every count here as
 ## How the signals are built
 
 `recorder.html` writes `t_sec,audio_rms,motion_mag` — a loudness RMS reading
-and an accelerometer-magnitude reading, both at 4 Hz. The viewer server
-(`scripts/dev/live_replay_demo.py`, `_load_personal_recording` /
-`_detrend`) turns the loudness signal into something shaped like a real
-effort channel before handing it to the real detector: it subtracts a short
-rolling mean so the signal oscillates around zero on every breath and goes
-flat during a pause — because the detector looks for *drops in oscillation
-around the signal's own median*, and raw loudness (always positive) doesn't
-have that shape on its own. This is a disclosed preprocessing step, not a
-different detector.
+and an accelerometer-magnitude reading, both at 4 Hz. Raw loudness is always
+positive, but `detect_events()` (`backend/app/services/respiratory_events/
+detector.py`) looks for *drops in oscillation around the signal's own
+median* — correct for a real effort belt (AC-coupled, swings positive and
+negative all night), backwards for a strictly-positive signal. Both the real
+app and the standalone viewer now share one fix for this:
+`prepare_resp_signal()` in that same `detector.py` — if a channel never goes
+negative, it subtracts a short rolling mean first so it oscillates around
+zero on every breath and goes flat during a pause, same shape as a real
+effort channel; a real physiological channel (already negative-going) passes
+through unchanged. One disclosed preprocessing step, one detector, used by
+both paths in §2.
+
+## What's missing: heart rate
+
+You can't get real heart rate from a phone microphone or accelerometer —
+that needs an actual pulse signal (ECG, or camera-based photoplethysmography
+with a finger over the camera+flash). Neither is built into `recorder.html`
+today. The `motion_mag` channel is *not* a heart-rate proxy — don't read the
+movement numbers as pulse. If heart-rate tracking matters to you, that's a
+real, separate feature (camera PPG capture) to build next, not something to
+fake from what's already being recorded.

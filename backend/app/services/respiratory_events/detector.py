@@ -23,6 +23,30 @@ HYPOPNEA_RATIO = 0.7   # envelope < 70% of local baseline
 APNEA_RATIO = 0.15     # envelope < 15% of local baseline
 MERGE_GAP_SEC = 2.0    # bridge short gaps between below-threshold runs
 
+PROXY_DETREND_WINDOW_SEC = 4.0
+
+
+def prepare_resp_signal(samples: np.ndarray, fs: float) -> np.ndarray:
+    """detect_events() below looks for drops in *deviation from the
+    signal's own median* — correct for a real respiratory-effort/airflow
+    channel, which is AC-coupled and oscillates around zero all night
+    (confirmed on MIT-BIH PSG: e.g. a "Resp (abdominal)" channel ranges
+    roughly -1.3 to 0.8). A strictly non-negative signal — e.g. a
+    microphone RMS/loudness reading from personal-sleep-tracker's
+    recorder.html, which can never go below 0 — doesn't have that shape:
+    its "median" sits inside the normal-breathing range, so a silent
+    apnea reads as a LARGER deviation from the median, not a smaller one
+    — backwards from what the detector expects. If the signal never goes
+    negative, subtract a short rolling mean first so it oscillates around
+    zero on every breath and goes flat during a pause, same as a real
+    effort channel. A real physiological channel (already negative-going)
+    passes through unchanged."""
+    if float(np.min(samples)) >= 0:
+        window = max(2, int(fs * PROXY_DETREND_WINDOW_SEC))
+        local_mean = pd.Series(samples).rolling(window=window, min_periods=1, center=True).mean().to_numpy()
+        return (samples - local_mean).astype(samples.dtype if np.issubdtype(samples.dtype, np.floating) else np.float32)
+    return samples
+
 
 @dataclass
 class CandidateEvent:

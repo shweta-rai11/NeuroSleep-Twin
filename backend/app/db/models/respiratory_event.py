@@ -23,7 +23,7 @@ class RespiratoryEvent(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     study_id: Mapped[int] = mapped_column(ForeignKey("studies.id"), index=True)
-    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id", ondelete="CASCADE"))
     algorithm_version: Mapped[str] = mapped_column(String(32))
 
     onset_sec: Mapped[float] = mapped_column(Float)

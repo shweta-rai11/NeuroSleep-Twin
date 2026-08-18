@@ -10,7 +10,7 @@ from app.services.autonomic_response.hr_features import (
 )
 from app.services.brain_response.eeg_features import compute_eeg_event_features
 from app.services.oxygen_burden.analysis import clean_spo2, enrich_event_with_oxygen
-from app.services.respiratory_events.detector import ALGORITHM_VERSION, detect_events
+from app.services.respiratory_events.detector import ALGORITHM_VERSION, detect_events, prepare_resp_signal
 from app.storage import get_storage
 
 _RESP_TYPE_PRIORITY = ["resp", "airflow", "effort"]
@@ -55,7 +55,7 @@ def get_or_detect_events(db: Session, study: Study) -> tuple[Channel | None, lis
         return resp_channel, sorted(existing, key=lambda e: e.onset_sec)
 
     storage = get_storage()
-    resp_samples = storage.get_array(resp_channel.storage_key)
+    resp_samples = prepare_resp_signal(storage.get_array(resp_channel.storage_key), resp_channel.sampling_rate)
     candidates = detect_events(resp_samples, resp_channel.sampling_rate)
 
     spo2_channel = pick_spo2_channel(study.channels)

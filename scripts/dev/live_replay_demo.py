@@ -51,7 +51,7 @@ from app.services.oxygen_burden.analysis import (  # noqa: E402
     compute_oxygen_summary,
     enrich_event_with_oxygen,
 )
-from app.services.respiratory_events.detector import CandidateEvent, detect_events  # noqa: E402
+from app.services.respiratory_events.detector import CandidateEvent, detect_events, prepare_resp_signal  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("live_replay_demo")
@@ -209,25 +209,6 @@ def _list_personal_recordings() -> list[dict]:
     return out
 
 
-DETREND_WINDOW_SEC = 4.0  # short enough that a real ~15s+ apnea doesn't get smoothed under detect_events' 10s minimum
-
-
-def _detrend(signal: np.ndarray, fs: float, window_sec: float) -> np.ndarray:
-    """detect_events() looks for drops in *deviation from the signal's own
-    median* — correct for a physiological effort belt, which is AC-coupled
-    and oscillates around zero all night. Microphone RMS is not: it's a
-    strictly positive loudness reading, so its "median" sits inside the
-    normal-breathing range and a silent apnea reads as a LARGER deviation
-    from that median, not a smaller one — backwards from what the detector
-    expects. Subtracting a short rolling mean turns "loudness" into
-    "loudness fluctuation around its own local trend," which does swing
-    around zero on every breath and does go flat during an apnea — the
-    shape the detector was actually built for."""
-    window = max(2, int(fs * window_sec))
-    local_mean = pd.Series(signal).rolling(window=window, min_periods=1, center=True).mean().to_numpy()
-    return (signal - local_mean).astype(np.float32)
-
-
 def _load_personal_recording(record_id: str) -> dict:
     stem = record_id[len(PERSONAL_PREFIX):]
     csv_path = PERSONAL_DIR / f"{stem}.csv"
@@ -243,8 +224,8 @@ def _load_personal_recording(record_id: str) -> dict:
     # recorder.html samples on a fixed setInterval tick but real device
     # timing jitters — interpolate onto a strictly uniform grid so the
     # (fs-in-seconds) window constants in detect_events()/etc. line up.
-    audio = np.interp(grid, df["t_sec"], df["audio_rms"])
-    result["resp"] = _detrend(audio, PERSONAL_SAMPLE_HZ, DETREND_WINDOW_SEC)
+    audio = np.interp(grid, df["t_sec"], df["audio_rms"]).astype(np.float32)
+    result["resp"] = prepare_resp_signal(audio, PERSONAL_SAMPLE_HZ)
     if "motion_mag" in df.columns:
         result["motion"] = np.interp(grid, df["t_sec"], df["motion_mag"]).astype(np.float32)
     return result

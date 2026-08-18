@@ -262,22 +262,44 @@
     await flushPending();
 
     setStatus('Saving ' + samples.length + ' samples…');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+
     const header = 't_sec,audio_rms,motion_mag\n';
     const body = samples.map(r => r.join(',')).join('\n');
     const csv = header + body + '\n';
-    const blob = new Blob([csv], { type: 'text/csv' });
+    downloadBlob(csv, 'text/csv', `sleep-${stamp}.csv`);
+
+    // A JSON sidecar in the exact shape the real app's upload pipeline
+    // expects (backend/app/services/ingestion/upload.py: _ingest_csv_json)
+    // — pairing it with the CSV above lets you select both files on the
+    // Upload Your Sleep Study page and run this through the real pipeline,
+    // not just the standalone Live Replay viewer.
+    const meta = {
+      sampling_rate: Math.round(1000 / SAMPLE_INTERVAL_MS),
+      units: { t_sec: 's', audio_rms: 'rms', motion_mag: 'm/s^2' },
+    };
+    setTimeout(() => downloadBlob(JSON.stringify(meta, null, 2), 'application/json', `sleep-${stamp}.meta.json`), 400);
+
+    setStatus(
+      samples.length + ' samples saved as two files: sleep-' + stamp + '.csv and .meta.json. ' +
+      'Either move the .csv into personal-sleep-tracker/recordings/ for the Live Replay viewer, ' +
+      'or select BOTH files together on the real app\'s Upload Your Sleep Study page (localhost:5173) to run it through the full pipeline.',
+      'ok'
+    );
+    els.recording.style.display = 'none';
+    els.setup.style.display = 'flex';
+  }
+
+  function downloadBlob(content, mime, filename) {
+    const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const a = document.createElement('a');
     a.href = url;
-    a.download = `sleep-${stamp}.csv`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
-
-    setStatus(samples.length + ' samples saved as sleep-' + stamp + '.csv — move that file into personal-sleep-tracker/recordings/ on your computer, then open the Live Replay viewer.', 'ok');
-    els.recording.style.display = 'none';
-    els.setup.style.display = 'flex';
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
   els.start.addEventListener('click', start);

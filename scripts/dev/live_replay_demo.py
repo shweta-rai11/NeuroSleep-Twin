@@ -82,6 +82,63 @@ CHANNEL_ORDER = ("eeg", "ecg", "resp", "spo2", "motion")
 
 FINGERPRINT_AXES = ["severity", "duration", "desaturation", "hr_response", "arousal"]
 
+# AASM severity bands, by events/hour — the same bands the cited studies
+# below use for AHI. IMPORTANT: the "events/hour" this app computes is
+# this project's own envelope-v1 candidate-event rate (README: "not a
+# clinical scorer"), not a manually-scored clinical AHI. Mapping it onto
+# these bands is a convenience for reading the cited research, not a claim
+# that this tool measures AHI. Every figure below is a verified reported
+# statistic from the cited study, not an estimate — if a study reported a
+# non-significant result, that's stated, not omitted.
+SEVERITY_BANDS = [(5.0, "normal"), (15.0, "mild"), (30.0, "moderate"), (float("inf"), "severe")]
+
+CV_RESEARCH_CONTEXT = {
+    "normal": [],
+    "mild": [
+        {
+            "study": "Peppard et al., NEJM 2000 (Wisconsin Sleep Cohort)",
+            "finding": "AHI 5.0-14.9 at baseline was associated with roughly 2x the odds of incident hypertension 4 years later (OR 2.03, 95% CI 1.29-3.17) vs. AHI 0.",
+            "url": "https://www.nejm.org/doi/full/10.1056/NEJM200005113421901",
+        },
+    ],
+    "moderate": [
+        {
+            "study": "Peppard et al., NEJM 2000 (Wisconsin Sleep Cohort)",
+            "finding": "AHI ≥15 at baseline was associated with roughly 2.9x the odds of incident hypertension 4 years later (OR 2.89, 95% CI 1.46-5.64) vs. AHI 0.",
+            "url": "https://www.nejm.org/doi/full/10.1056/NEJM200005113421901",
+        },
+        {
+            "study": "Punjabi et al., PLoS Medicine 2009 (Sleep Heart Health Study, n=6,441)",
+            "finding": "Moderate SDB (AHI 15-29.9) trended toward higher all-cause mortality (HR 1.17, 95% CI 0.97-1.42) vs. AHI<5 — reported as NOT statistically significant on its own.",
+            "url": "https://journals.plos.org/plosmedicine/article?id=10.1371/journal.pmed.1000132",
+        },
+    ],
+    "severe": [
+        {
+            "study": "Marin et al., Lancet 2005",
+            "finding": "Untreated severe OSA was associated with roughly 2.9x the odds of a fatal (OR 2.87, 95% CI 1.17-7.51) and 3.2x a non-fatal (OR 3.17, 95% CI 1.12-7.51) cardiovascular event vs. healthy men, over long-term follow-up.",
+            "url": "https://www.thelancet.com/journals/lancet/article/PIIS0140-6736(05)71141-7/abstract",
+        },
+        {
+            "study": "Punjabi et al., PLoS Medicine 2009 (Sleep Heart Health Study, n=6,441)",
+            "finding": "Severe SDB (AHI ≥30) was associated with 1.46x all-cause mortality (HR 1.46, 95% CI 1.14-1.86) vs. AHI<5; in men aged 40-70 specifically, HR 2.09 (95% CI 1.31-3.33).",
+            "url": "https://journals.plos.org/plosmedicine/article?id=10.1371/journal.pmed.1000132",
+        },
+        {
+            "study": "Shahar et al., AJRCCM 2001 (Sleep Heart Health Study, n=6,424)",
+            "finding": "The highest AHI quartile was associated with 2.4x the odds of prevalent heart failure (OR 2.38, 95% CI 1.22-4.62) vs. the lowest quartile.",
+            "url": "https://www.atsjournals.org/doi/full/10.1164/ajrccm.163.1.2001008",
+        },
+    ],
+}
+
+
+def _severity_band(events_per_hour: float) -> str:
+    for threshold, label in SEVERITY_BANDS:
+        if events_per_hour < threshold:
+            return label
+    return "severe"
+
 TICK_SEC = 0.2  # wall-clock pacing granularity
 SCAN_INTERVAL_WALL_SEC = 5.0  # how often we re-run event detection on the buffer so far
 FINALIZE_MARGIN_SEC = 25.0  # let the detector's own rolling-baseline edge settle before trusting an event
@@ -448,6 +505,16 @@ async def ws_replay(websocket: WebSocket):
             stats = {"type": "stats", "elapsed_sim_sec": round(sim_time, 1), "n_events": len(emitted)}
             if spo2_clean is not None:
                 stats["oxygen"] = asdict(compute_oxygen_summary(spo2_clean[:idx], fs))
+
+            elapsed_hours = sim_time / 3600
+            if elapsed_hours > 0:
+                events_per_hour = len(emitted) / elapsed_hours
+                band = _severity_band(events_per_hour)
+                stats["cv_context"] = {
+                    "events_per_hour": round(events_per_hour, 1),
+                    "severity": band,
+                    "associations": CV_RESEARCH_CONTEXT[band],
+                }
             await websocket.send_json(stats)
 
         await websocket.send_json({"type": "done"})

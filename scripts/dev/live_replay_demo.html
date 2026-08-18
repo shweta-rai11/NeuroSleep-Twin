@@ -99,6 +99,22 @@
   .legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 8px 14px 12px; font-size: 0.72rem; color: var(--ink-soft); }
   .legend .item { display: flex; align-items: center; gap: 6px; }
   .legend .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .cv-panel { margin-top: 18px; }
+  .cv-head-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px; border-bottom: 1px solid var(--line-soft); }
+  .cv-head-row .title { font-size: 0.85rem; font-weight: 650; }
+  .cv-head-row .sub { font-size: 0.72rem; color: var(--ink-faint); }
+  .pill {
+    font-family: ui-monospace, monospace; font-size: 0.72rem; font-weight: 650; text-transform: uppercase;
+    letter-spacing: 0.04em; padding: 3px 9px; border-radius: 20px; color: var(--paper);
+  }
+  .cv-note { padding: 10px 14px; font-size: 0.76rem; color: var(--ink-soft); border-bottom: 1px solid var(--line-soft); line-height: 1.5; }
+  .cv-cards { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .cv-card { border: 1px solid var(--line); border-radius: 3px; padding: 10px 12px; font-size: 0.8rem; }
+  .cv-card .study { font-weight: 650; margin-bottom: 3px; }
+  .cv-card .finding { color: var(--ink-soft); line-height: 1.5; }
+  .cv-card a { color: var(--accent); font-size: 0.74rem; }
+  .cv-empty { padding: 4px 0; color: var(--ink-faint); font-size: 0.8rem; }
 </style>
 </head>
 <body>
@@ -150,6 +166,20 @@
       <div class="head">Event fingerprints — as they're detected</div>
       <div class="feed" id="feed"><div class="empty-feed">Waiting for the first confirmed event…</div></div>
     </div>
+  </div>
+
+  <div class="panel cv-panel">
+    <div class="cv-head-row">
+      <span class="pill" id="cv-pill" style="background:var(--line-soft);color:var(--ink-faint)">—</span>
+      <div>
+        <div class="title">Cardiovascular risk context</div>
+        <div class="sub" id="cv-rate">Waiting for enough data to estimate an events/hour rate…</div>
+      </div>
+    </div>
+    <div class="cv-note">
+      This is <b>population-level research context, not a personal risk score</b>. "Events/hour" here is this tool's own detected candidate-event rate — not a clinically-scored AHI — mapped onto the same severity bands the cited studies used for AHI, so you can see what large cohort studies found in that range. It says nothing about your individual risk.
+    </div>
+    <div class="cv-cards" id="cv-cards"><div class="cv-empty">Not enough elapsed time yet to estimate a rate.</div></div>
   </div>
 </div>
 
@@ -269,6 +299,33 @@
   }
   window.addEventListener('resize', drawWave);
 
+  // ---- cardiovascular risk context ----
+  const SEVERITY_COLOR = { normal: '--good', mild: '--accent', moderate: '--warn', severe: '--bad' };
+
+  function renderCvContext(cv) {
+    const pill = document.getElementById('cv-pill');
+    const color = cssVar(SEVERITY_COLOR[cv.severity] || '--ink-faint');
+    pill.textContent = cv.severity;
+    pill.style.background = color;
+    pill.style.color = cssVar('--paper');
+
+    document.getElementById('cv-rate').textContent =
+      `${cv.events_per_hour.toFixed(1)} detected events/hour so far — mapped to the "${cv.severity}" AHI band`;
+
+    const cardsEl = document.getElementById('cv-cards');
+    if (!cv.associations.length) {
+      cardsEl.innerHTML = '<div class="cv-empty">No elevated cardiovascular-risk associations reported in the cited research at this band.</div>';
+      return;
+    }
+    cardsEl.innerHTML = cv.associations.map(a => `
+      <div class="cv-card">
+        <div class="study">${a.study}</div>
+        <div class="finding">${a.finding}</div>
+        <a href="${a.url}" target="_blank" rel="noopener">Read the study →</a>
+      </div>
+    `).join('');
+  }
+
   // ---- event feed ----
   const AXIS_COLOR = { severity: '--accent', duration: '--accent', desaturation: '--spo2', hr_response: '--ecg', arousal: '--eeg' };
   const TYPE_COLOR = { apnea: '--bad', hypopnea: '--warn' };
@@ -325,6 +382,11 @@
     if (ws) { try { ws.close(); } catch (e) {} }
     els.feed.innerHTML = '<div class="empty-feed">Waiting for the first confirmed event…</div>';
     els.statEvents.textContent = '0'; els.statOdi.textContent = '—'; els.statMean.textContent = '—'; els.statMin.textContent = '—';
+    document.getElementById('cv-pill').textContent = '—';
+    document.getElementById('cv-pill').style.background = 'var(--line-soft)';
+    document.getElementById('cv-pill').style.color = 'var(--ink-faint)';
+    document.getElementById('cv-rate').textContent = 'Waiting for enough data to estimate an events/hour rate…';
+    document.getElementById('cv-cards').innerHTML = '<div class="cv-empty">Not enough elapsed time yet to estimate a rate.</div>';
     paused = false; els.pause.textContent = 'Pause';
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -365,6 +427,7 @@
             els.statMean.textContent = data.oxygen.mean_spo2.toFixed(1) + '%';
             els.statMin.textContent = data.oxygen.min_spo2.toFixed(1) + '%';
           }
+          if (data.cv_context) renderCvContext(data.cv_context);
           break;
         case 'event':
           renderEvent(data);

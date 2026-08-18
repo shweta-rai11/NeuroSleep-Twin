@@ -1,6 +1,17 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import analysis, assistant, datasets, health, longitudinal, phenotyping, studies, system, uploads
+from app.api.v1.endpoints import (
+    analysis,
+    apple_health,
+    assistant,
+    datasets,
+    health,
+    longitudinal,
+    phenotyping,
+    studies,
+    system,
+    uploads,
+)
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -12,3 +23,4 @@ api_router.include_router(phenotyping.router)
 api_router.include_router(longitudinal.router)
 api_router.include_router(assistant.router)
 api_router.include_router(system.router)
+api_router.include_router(apple_health.router)

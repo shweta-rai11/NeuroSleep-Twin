@@ -7,7 +7,7 @@ to review/correct it before it's treated as confirmed (README §5).
 import re
 
 STANDARD_SIGNAL_TYPES = [
-    "eeg", "eog", "emg", "ecg", "resp", "airflow", "effort", "spo2", "bp", "position", "other",
+    "eeg", "eog", "emg", "ecg", "resp", "airflow", "effort", "spo2", "bp", "position", "audio", "other",
 ]
 
 # (regex matched against a normalized, lowercased channel name, standard type, confidence)
@@ -26,6 +26,7 @@ _RULES: list[tuple[re.Pattern[str], str, float]] = [
     (re.compile(r"\bairflow\b|\bnasal\b|\btherm(istor|ocouple)?\b|\bflow\b"), "airflow", 0.75),
     (re.compile(r"\beffort\b|\bthora(x|cic)\b|\babdomen?\b|\bchest\b|\bbelt\b"), "effort", 0.75),
     (re.compile(r"\bresp\w*\b"), "resp", 0.7),
+    (re.compile(r"^audio$|\bmic(rophone)?\b"), "audio", 0.95),
 ]
 
 

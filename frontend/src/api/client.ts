@@ -1,5 +1,7 @@
 import type { DatasetEntry } from "@/types/dataset";
 import type {
+  AcousticAnalysisResult,
+  AppleHealthSession,
   BenchmarkResult,
   BeyondAhiResult,
   EventFeatureResult,
@@ -27,15 +29,27 @@ function authHeaders(): HeadersInit {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: { ...authHeaders(), ...init?.headers },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: { ...authHeaders(), ...init?.headers },
+    });
+  } catch {
+    throw new Error(`Could not reach the backend. Is it running on :8000?`);
+  }
+
   if (res.status === 401) {
     throw new Error("Unauthorized — check that VITE_API_TOKEN matches the backend's API_AUTH_TOKEN.");
   }
   if (!res.ok) {
-    throw new Error(`Request to ${path} failed with status ${res.status}`);
+    // FastAPI error responses are {"detail": "..."} — surface that instead
+    // of a bare status code so the user sees why, not just that it failed.
+    const detail = await res
+      .json()
+      .then((body) => (typeof body?.detail === "string" ? body.detail : null))
+      .catch(() => null);
+    throw new Error(detail ?? `Request to ${path} failed with status ${res.status}`);
   }
   return res.json() as Promise<T>;
 }
@@ -88,6 +102,8 @@ export const api = {
   getBrainResponse: (studyId: number) => request<EventFeatureResult>(`/studies/${studyId}/brain-response`),
   getAutonomicResponse: (studyId: number) => request<EventFeatureResult>(`/studies/${studyId}/autonomic-response`),
   getBeyondAhi: (studyId: number) => request<BeyondAhiResult>(`/studies/${studyId}/beyond-ahi`),
+  getAcousticAnalysis: (studyId: number) =>
+    request<AcousticAnalysisResult>(`/studies/${studyId}/acoustic-analysis`),
 
   getBenchmark: (studyId: number) => request<BenchmarkResult>(`/studies/${studyId}/benchmark`),
   getLongitudinal: () => request<LongitudinalResult>("/longitudinal"),
@@ -99,6 +115,16 @@ export const api = {
 
   getAssistantStatus: () =>
     request<{ configured: boolean; provider: "ollama" | "anthropic" | null; model: string | null }>("/assistant/status"),
+
+  scanAppleHealth: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{ source_id: string; sessions: AppleHealthSession[] }>("/apple-health/scan", {
+      method: "POST", body: form,
+    });
+  },
+  importAppleHealthNight: (sourceId: string, sessionIndex: number) =>
+    request<StudyDetail>(`/apple-health/${sourceId}/import/${sessionIndex}`, { method: "POST" }),
   askAssistant: (studyId: number, question: string) =>
     request<{ answer: string; configured: boolean; evidence: Record<string, unknown> }>(
       `/studies/${studyId}/assistant/ask`,

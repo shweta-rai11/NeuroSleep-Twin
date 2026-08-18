@@ -4,8 +4,12 @@ import { useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
 import { Card } from "@/components/layout/Card";
+import AppleHealthImport from "./AppleHealthImport";
 
-const ACCEPTED_HINT = ".edf · .hea/.dat (or zipped) · .csv + .json";
+const ACCEPTED_HINT = ".edf · .hea/.dat (or zipped) · .csv + .json · audio/video (.mp4/.m4a/.mov/.mp3/.wav)";
+const ACCEPTED_EXTENSIONS = [
+  ".edf", ".hea", ".dat", ".zip", ".csv", ".json", ".mp4", ".m4a", ".mov", ".mp3", ".wav", ".aac",
+];
 const POLL_INTERVAL_MS = 2000;
 
 type Stage = "idle" | "uploading" | "ingesting" | "error";
@@ -20,7 +24,17 @@ export default function UploadPage() {
   const [dragOver, setDragOver] = useState(false);
 
   function addFiles(fileList: FileList | File[]) {
-    setFiles((prev) => [...prev, ...Array.from(fileList)]);
+    const incoming = Array.from(fileList);
+    const rejected = incoming.filter(
+      (f) => !ACCEPTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext)),
+    );
+    if (rejected.length > 0) {
+      setError(
+        `${rejected.map((f) => f.name).join(", ")} — not an accepted file type. Accepted: ${ACCEPTED_HINT}`,
+      );
+      return;
+    }
+    setFiles((prev) => [...prev, ...incoming]);
     setError(null);
   }
 
@@ -50,8 +64,8 @@ export default function UploadPage() {
           return;
         }
       }
-    } catch {
-      setError("Upload failed. Is the backend running on :8000?");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed. Is the backend running on :8000?");
       setStage("error");
     }
   }
@@ -62,8 +76,14 @@ export default function UploadPage() {
     <div className="mx-auto max-w-2xl">
       <h1 className="text-xl font-semibold text-slate-900">Upload Your Sleep Study</h1>
       <p className="mt-1 text-sm text-slate-600">
-        Runs through the exact same analysis pipeline as public data. Uploaded data is private
-        by default and is never used to train models without your explicit opt-in.
+        Real PSG data (EDF/WFDB/CSV+JSON) runs through the exact same full pipeline as public
+        data. Uploaded data is private by default and is never used to train models without your
+        explicit opt-in.
+      </p>
+      <p className="mt-2 text-xs text-slate-500">
+        A voice memo or phone video gets a different, much rougher analysis instead — acoustic
+        breathing-pause detection from the audio, not the EEG/ECG/SpO2 pipeline. It's a hint at
+        best, not a finding: quiet normal breathing and a real pause can sound identical.
       </p>
 
       <Card className="mt-4">
@@ -92,8 +112,12 @@ export default function UploadPage() {
             ref={inputRef}
             type="file"
             multiple
+            accept={ACCEPTED_EXTENSIONS.join(",")}
             className="hidden"
-            onChange={(e) => e.target.files && addFiles(e.target.files)}
+            onChange={(e) => {
+              if (e.target.files) addFiles(e.target.files);
+              e.target.value = ""; // allow re-selecting the same (corrected) file after a rejection
+            }}
           />
         </div>
 
@@ -148,6 +172,8 @@ export default function UploadPage() {
           {(stage === "idle" || stage === "error") && "Upload & Analyze"}
         </button>
       </Card>
+
+      <AppleHealthImport />
     </div>
   );
 }

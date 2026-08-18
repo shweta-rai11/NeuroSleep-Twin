@@ -148,6 +148,26 @@ export interface BeyondAhiResult {
   recovery_burden: BurdenMetric | null;
 }
 
+export interface AcousticPause {
+  onset_sec: number;
+  duration_sec: number;
+  depth_ratio: number;
+}
+
+export interface AcousticAnalysisResult {
+  study_id: number;
+  available: boolean;
+  message: string | null;
+  channel_used: ChannelRef | null;
+  summary: {
+    pause_count: number;
+    pauses_per_hour: number;
+    mean_pause_duration_sec: number;
+    pct_time_in_pause: number;
+  } | null;
+  pauses: AcousticPause[];
+}
+
 export interface PhenotypeCluster {
   cluster_index: number;
   label: string;
@@ -206,6 +226,14 @@ export interface LongitudinalResult {
   available: boolean;
   message: string | null;
   patients: { patient_key: string; nights: NightSummary[] }[];
+}
+
+export interface AppleHealthSession {
+  index: number;
+  start: string;
+  end: string;
+  duration_hours: number;
+  record_count: number;
 }
 
 export interface SignalWindow {

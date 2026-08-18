@@ -45,6 +45,13 @@ def pick_ecg_channel(channels: list[Channel]) -> Channel | None:
     return None
 
 
+def pick_audio_channel(channels: list[Channel]) -> Channel | None:
+    for ch in channels:
+        if ch.signal_type == "audio":
+            return ch
+    return None
+
+
 def get_or_detect_events(db: Session, study: Study) -> tuple[Channel | None, list[RespiratoryEvent]]:
     resp_channel = pick_primary_resp_channel(study.channels)
     if resp_channel is None:

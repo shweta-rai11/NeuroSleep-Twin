@@ -102,3 +102,25 @@ class BeyondAhiOut(BaseModel):
     arousal_burden: BurdenMetricOut | None
     autonomic_burden: BurdenMetricOut | None
     recovery_burden: BurdenMetricOut | None
+
+
+class AcousticPauseOut(BaseModel):
+    onset_sec: float
+    duration_sec: float
+    depth_ratio: float
+
+
+class AcousticSummaryOut(BaseModel):
+    pause_count: int
+    pauses_per_hour: float
+    mean_pause_duration_sec: float
+    pct_time_in_pause: float
+
+
+class AcousticAnalysisOut(BaseModel):
+    study_id: int
+    available: bool
+    message: str | None
+    channel_used: ChannelRef | None
+    summary: AcousticSummaryOut | None
+    pauses: list[AcousticPauseOut]

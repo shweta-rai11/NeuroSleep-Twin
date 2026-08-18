@@ -4,6 +4,9 @@ from sqlalchemy.orm import Session
 from app.db.models.study import Study
 from app.db.session import get_db
 from app.schemas.analysis import (
+    AcousticAnalysisOut,
+    AcousticPauseOut,
+    AcousticSummaryOut,
     BeyondAhiOut,
     BurdenMetricOut,
     ChannelRef,
@@ -16,6 +19,7 @@ from app.schemas.analysis import (
     StageEpochOut,
 )
 from app.schemas.benchmarking import BenchmarkOut, ConfusionMatrixOut, CurveOut
+from app.services.acoustic.breathing_detector import detect_acoustic_pauses
 from app.services.benchmarking.epoch_benchmark import compute_epoch_benchmark
 from app.services.beyond_ahi import compute_beyond_ahi
 from app.services.oxygen_burden.analysis import clean_spo2, compute_oxygen_summary
@@ -24,6 +28,7 @@ from app.services.respiratory_events.pipeline import (
     ensure_eeg_enriched,
     ensure_hr_enriched,
     get_or_detect_events,
+    pick_audio_channel,
     pick_spo2_channel,
 )
 from app.services.sleep_staging.from_annotations import parse_hypnogram
@@ -203,6 +208,40 @@ def get_beyond_ahi(study_id: int, db: Session = Depends(get_db)) -> BeyondAhiOut
         oxygen_mean_desaturation=_out(result.oxygen_mean_desaturation),
         arousal_burden=_out(result.arousal_burden), autonomic_burden=_out(result.autonomic_burden),
         recovery_burden=_out(result.recovery_burden),
+    )
+
+
+@router.get("/studies/{study_id}/acoustic-analysis", response_model=AcousticAnalysisOut)
+def get_acoustic_analysis(study_id: int, db: Session = Depends(get_db)) -> AcousticAnalysisOut:
+    study = _get_study_or_404(study_id, db)
+    audio_channel = pick_audio_channel(study.channels)
+
+    if audio_channel is None:
+        return AcousticAnalysisOut(
+            study_id=study_id, available=False,
+            message="No audio channel is mapped for this study — this analysis only applies to "
+            "an uploaded audio/video recording.",
+            channel_used=None, summary=None, pauses=[],
+        )
+
+    samples = get_storage().get_array(audio_channel.storage_key)
+    pauses, _envelope, _frame_sec = detect_acoustic_pauses(samples, audio_channel.sampling_rate)
+    duration_hr = (study.duration_sec or 0) / 3600
+
+    summary = AcousticSummaryOut(
+        pause_count=len(pauses),
+        pauses_per_hour=round(len(pauses) / duration_hr, 2) if duration_hr > 0 else 0.0,
+        mean_pause_duration_sec=round(sum(p.duration_sec for p in pauses) / len(pauses), 1) if pauses else 0.0,
+        pct_time_in_pause=round(sum(p.duration_sec for p in pauses) / (study.duration_sec or 1) * 100, 2),
+    )
+    return AcousticAnalysisOut(
+        study_id=study_id, available=True,
+        message="Acoustic analysis of a phone/mic recording — a much rougher, unvalidated proxy "
+        "than the EEG/ECG/SpO2-based pipeline. Quiet normal breathing and a real pause can look "
+        "identical in raw sound; treat this as a hint to look at, not a finding.",
+        channel_used=ChannelRef(id=audio_channel.id, name=audio_channel.name),
+        summary=summary,
+        pauses=[AcousticPauseOut(onset_sec=p.onset_sec, duration_sec=p.duration_sec, depth_ratio=p.depth_ratio) for p in pauses],
     )
 
 

@@ -1,20 +1,28 @@
 """Ingests a user-uploaded sleep study — EDF/EDF+, WFDB (as a .zip bundle of
-its record files), or CSV+JSON. This is Phase 3's real upload pipeline; it
-shares the same Channel/Annotation storage shape as the public MIT-BIH
-ingestion (app/services/ingestion/mitbih.py) so every later pipeline stage
-(QC, staging, event detection, ...) is format-agnostic from here on.
+its record files), CSV+JSON, or a plain audio/video recording (voice memo,
+phone video). This is Phase 3's real upload pipeline; it shares the same
+Channel/Annotation storage shape as the public MIT-BIH ingestion
+(app/services/ingestion/mitbih.py) so every later pipeline stage (QC,
+staging, event detection, ...) is format-agnostic from here on.
+
+Audio is a fundamentally weaker data source than the others here — a phone
+mic recording, not a calibrated physiological sensor — and is analyzed by a
+separate, more heavily caveated pipeline (app/services/acoustic/), never
+folded into the EEG/ECG/SpO2-based analyses the rest of this module feeds.
 """
 
 import csv as csv_module
 import json
 import logging
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
 import mne
 import numpy as np
 import wfdb
+from scipy.io import wavfile
 from sqlalchemy.orm import Session
 
 from app.db.models.annotation import Annotation
@@ -27,9 +35,12 @@ logger = logging.getLogger(__name__)
 
 DATASET_ID = "user-upload"
 
+AUDIO_EXTENSIONS = {".mp4", ".m4a", ".mov", ".mp3", ".wav", ".aac"}
+AUDIO_SAMPLE_RATE_HZ = 4000  # plenty for breathing/snore-band amplitude content; keeps storage/compute small
+
 # Accepted upload extensions. Anything else is rejected before it ever
 # touches disk (README §11: file-type validation gates all uploads).
-ALLOWED_EXTENSIONS = {".edf", ".csv", ".json", ".zip", ".hea", ".dat"}
+ALLOWED_EXTENSIONS = {".edf", ".csv", ".json", ".zip", ".hea", ".dat"} | AUDIO_EXTENSIONS
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500MB — generous for a night of PSG, still bounded
 
 
@@ -47,9 +58,12 @@ def detect_format(filenames: list[str]) -> str:
         return "wfdb"
     if any(f.endswith(".csv") for f in lowered) and any(f.endswith(".json") for f in lowered):
         return "csv_json"
+    if any(Path(f).suffix in AUDIO_EXTENSIONS for f in lowered):
+        return "audio"
     raise UnsupportedUploadError(
         "Unrecognized upload — provide an EDF/EDF+ file, a WFDB record (.hea/.dat, "
-        "optionally zipped), or a CSV of samples plus a JSON metadata file."
+        "optionally zipped), a CSV of samples plus a JSON metadata file, or an audio/video "
+        "recording (.mp4/.m4a/.mov/.mp3/.wav/.aac)."
     )
 
 
@@ -75,6 +89,17 @@ def validate_file_signature(filename: str, content: bytes) -> None:
             json.loads(content)
         except json.JSONDecodeError as exc:
             raise UnsupportedUploadError(f"'{filename}' is not valid JSON.") from exc
+    if ext in AUDIO_EXTENSIONS:
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-i", "pipe:0", "-select_streams", "a:0",
+                 "-show_entries", "stream=codec_type", "-of", "csv=p=0"],
+                input=content, capture_output=True, timeout=15,
+            )
+        except FileNotFoundError as exc:
+            raise UnsupportedUploadError("Audio decoding is unavailable on this server (ffmpeg not installed).") from exc
+        if b"audio" not in result.stdout:
+            raise UnsupportedUploadError(f"'{filename}' doesn't contain a readable audio stream.")
 
 
 def _write_channels_and_annotations(
@@ -169,6 +194,22 @@ def _ingest_csv_json(study: Study, upload_dir: Path, db: Session) -> None:
     _write_channels_and_annotations(db, study, channel_names, units, fs, data, [], "upload")
 
 
+def _ingest_audio(study: Study, upload_dir: Path, db: Session) -> None:
+    audio_path = next(p for p in upload_dir.iterdir() if p.suffix.lower() in AUDIO_EXTENSIONS)
+    wav_path = upload_dir / "_decoded.wav"
+
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(audio_path), "-ac", "1", "-ar", str(AUDIO_SAMPLE_RATE_HZ), "-f", "wav", str(wav_path)],
+        capture_output=True, timeout=600,
+    )
+    if result.returncode != 0:
+        raise UnsupportedUploadError(f"Could not decode audio: {result.stderr.decode(errors='replace')[-500:]}")
+
+    fs, samples_int = wavfile.read(wav_path)
+    samples = samples_int.astype(np.float32) / 32768.0
+    _write_channels_and_annotations(db, study, ["Audio"], ["normalized"], float(fs), samples[np.newaxis, :], [], "upload")
+
+
 def ingest_upload(db: Session, study_id: int) -> Study:
     study = db.get(Study, study_id)
     if study is None:
@@ -198,6 +239,8 @@ def ingest_upload(db: Session, study_id: int) -> Study:
             _ingest_edf(study, upload_dir, db)
         elif fmt == "csv_json":
             _ingest_csv_json(study, upload_dir, db)
+        elif fmt == "audio":
+            _ingest_audio(study, upload_dir, db)
 
         study.status = "ingested"
         db.commit()

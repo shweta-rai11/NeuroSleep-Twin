@@ -8,14 +8,14 @@
   :root {
     --paper: #EAEDEF; --paper-raised: #F6F7F8; --ink: #10202B; --ink-soft: #4C5D66; --ink-faint: #7C8B92;
     --line: #C7D1D4; --line-soft: #DAE1E3; --accent: #A5721C;
-    --ecg: #A5473D; --spo2: #1F6F72; --eeg: #45549C;
+    --ecg: #A5473D; --spo2: #1F6F72; --eeg: #45549C; --motion: #4B7BAA;
     --good: #2A7D46; --warn: #A5721C; --bad: #A5473D;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --paper: #0B1417; --paper-raised: #101B20; --ink: #DCE6E8; --ink-soft: #9FB3B8; --ink-faint: #6C8086;
       --line: #223138; --line-soft: #182229; --accent: #E0A845;
-      --ecg: #E0897C; --spo2: #57C6C4; --eeg: #9DACEB;
+      --ecg: #E0897C; --spo2: #57C6C4; --eeg: #9DACEB; --motion: #7CA6D8;
       --good: #5CC97E; --warn: #E0A845; --bad: #E0897C;
     }
   }
@@ -89,6 +89,12 @@
   .fp-bars { display: flex; gap: 2px; margin-top: 6px; height: 14px; align-items: flex-end; }
   .fp-bars .bar { flex: 1; background: var(--line-soft); border-radius: 1px; position: relative; }
   .fp-bars .bar span { display: block; width: 100%; border-radius: 1px; }
+  .fp-bars .bar.na {
+    background: repeating-linear-gradient(45deg, var(--line-soft), var(--line-soft) 2px, transparent 2px, transparent 4px);
+    height: 100%;
+  }
+  .fp-axis-labels { display: flex; gap: 2px; margin-top: 2px; }
+  .fp-axis-labels span { flex: 1; font-size: 0.58rem; text-align: center; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 8px 14px 12px; font-size: 0.72rem; color: var(--ink-soft); }
   .legend .item { display: flex; align-items: center; gap: 6px; }
@@ -104,7 +110,7 @@
     </div>
   </header>
 
-  <div class="banner">
+  <div class="banner" id="banner">
     <b>Simulated replay of a real, de-identified PhysioNet recording</b> (MIT-BIH Polysomnographic Database), played back at an adjustable speed. Not a live patient feed, not a diagnostic output.
   </div>
 
@@ -128,20 +134,15 @@
 
   <div class="stage">
     <div class="panel">
-      <div class="head">EEG · ECG · Respiration · SpO2 — live</div>
+      <div class="head" id="wave-head">live signal</div>
       <canvas id="wave"></canvas>
-      <div class="legend mono">
-        <span class="item"><span class="dot" style="background:var(--eeg)"></span>EEG</span>
-        <span class="item"><span class="dot" style="background:var(--ecg)"></span>ECG</span>
-        <span class="item"><span class="dot" style="background:var(--accent)"></span>Resp</span>
-        <span class="item"><span class="dot" style="background:var(--spo2)"></span>SpO2</span>
-      </div>
+      <div class="legend mono" id="legend"></div>
       <div class="head" style="border-top:1px solid var(--line-soft)">Running summary</div>
       <div class="stats-row mono">
         <div class="stat"><div class="v" id="stat-events">0</div><div class="l">events detected</div></div>
-        <div class="stat"><div class="v" id="stat-odi">—</div><div class="l">ODI / hr</div></div>
-        <div class="stat"><div class="v" id="stat-mean">—</div><div class="l">mean SpO2</div></div>
-        <div class="stat"><div class="v" id="stat-min">—</div><div class="l">min SpO2</div></div>
+        <div class="stat" id="stat-odi-wrap"><div class="v" id="stat-odi">—</div><div class="l">ODI / hr</div></div>
+        <div class="stat" id="stat-mean-wrap"><div class="v" id="stat-mean">—</div><div class="l">mean SpO2</div></div>
+        <div class="stat" id="stat-min-wrap"><div class="v" id="stat-min">—</div><div class="l">min SpO2</div></div>
       </div>
     </div>
 
@@ -182,21 +183,36 @@
 
   // ---- record list ----
   fetch('/api/records').then(r => r.json()).then(records => {
-    els.record.innerHTML = records.map(r =>
-      `<option value="${r.id}">${r.label}${r.cached ? ' — cached' : ''}</option>`
-    ).join('');
+    const mine = records.filter(r => r.personal);
+    const demo = records.filter(r => !r.personal);
+    const opt = r => `<option value="${r.id}">${r.label}${r.cached ? ' — cached' : ''}</option>`;
+    els.record.innerHTML =
+      (mine.length ? `<optgroup label="My recordings">${mine.map(opt).join('')}</optgroup>` : '') +
+      `<optgroup label="PhysioNet demo data">${demo.map(opt).join('')}</optgroup>`;
+    if (mine.length) els.record.value = mine[0].id; // default to your own data when you have any
   }).catch(() => {
     els.status.textContent = 'Could not reach the demo server\'s /api/records endpoint.';
   });
 
   // ---- rolling waveform buffers ----
-  const LANES = ['eeg', 'ecg', 'resp', 'spo2'];
-  const LANE_COLOR = { eeg: '--eeg', ecg: '--ecg', resp: '--accent', spo2: '--spo2' };
+  const LANE_COLOR = { eeg: '--eeg', ecg: '--ecg', resp: '--accent', spo2: '--spo2', motion: '--motion' };
+  const LANE_LABEL = { eeg: 'EEG', ecg: 'ECG', resp: 'Resp / Breath', spo2: 'SpO2', motion: 'Motion' };
   const MAX_POINTS = 600; // per lane, ring buffer
-  const buffers = { eeg: [], ecg: [], resp: [], spo2: [] };
+  let LANES = ['eeg', 'ecg', 'resp', 'spo2'];
+  let buffers = { eeg: [], ecg: [], resp: [], spo2: [], motion: [] };
+
+  function setActiveLanes(channels) {
+    LANES = channels.slice();
+    buffers = {}; LANES.forEach(l => { buffers[l] = []; });
+    document.getElementById('legend').innerHTML = LANES.map(l =>
+      `<span class="item"><span class="dot" style="background:var(${LANE_COLOR[l]})"></span>${LANE_LABEL[l]}</span>`
+    ).join('');
+    document.getElementById('wave-head').textContent = LANES.map(l => LANE_LABEL[l]).join(' · ') + ' — live';
+  }
 
   function pushEnvelope(lane, pairs) {
     const buf = buffers[lane];
+    if (!buf) return;
     for (const p of pairs) buf.push(p);
     while (buf.length > MAX_POINTS) buf.shift();
   }
@@ -268,17 +284,25 @@
     if (ev.oxygen && ev.oxygen.desaturation_depth != null) metrics.push(`SpO2 −${ev.oxygen.desaturation_depth.toFixed(1)}%`);
     if (ev.hr && ev.hr.hr_response_bpm != null) metrics.push(`HR +${ev.hr.hr_response_bpm.toFixed(0)} bpm`);
     if (ev.eeg && ev.eeg.arousal_probability != null) metrics.push(`arousal p=${ev.eeg.arousal_probability.toFixed(2)}`);
+    if (ev.movement && ev.movement.delta != null) metrics.push(`movement ${ev.movement.delta >= 0 ? '+' : ''}${ev.movement.delta.toFixed(2)}`);
 
+    // Axes with no underlying sensor (e.g. no ECG -> no hr_response) render as
+    // a hatched "n/a" bar, not a colored 0 — a 0 bar would silently read as
+    // "measured and found to be zero," which isn't true.
+    const HAS_SOURCE = { severity: true, duration: true, desaturation: !!ev.oxygen, hr_response: !!ev.hr, arousal: !!ev.eeg };
     const bars = ev.fingerprint.axes.map((axis, i) => {
       const val = ev.fingerprint.values[i];
+      if (!HAS_SOURCE[axis]) return `<div class="bar na" title="${axis}: not measured (no matching sensor in this recording)"></div>`;
       const color = cssVar(AXIS_COLOR[axis] || '--accent');
       return `<div class="bar" title="${axis}: ${val.toFixed(2)}"><span style="height:${Math.round(val * 100)}%;background:${color};position:absolute;bottom:0;left:0;right:0;"></span></div>`;
     }).join('');
+    const labels = ev.fingerprint.axes.map(a => `<span>${a.replace('_', ' ')}</span>`).join('');
 
     card.innerHTML = `
       <div class="row1"><span class="type">${ev.event_type}</span><span class="t mono">t = ${fmtHMS(ev.onset_sec)}</span></div>
       <div class="metrics mono">${metrics.join(' · ')}</div>
       <div class="fp-bars">${bars}</div>
+      <div class="fp-axis-labels">${labels}</div>
     `;
     els.feed.insertBefore(card, els.feed.firstChild);
   }
@@ -292,9 +316,13 @@
     els.skip.disabled = !running;
   }
 
+  const BANNER = {
+    physionet: '<b>Simulated replay of a real, de-identified PhysioNet recording</b> (MIT-BIH Polysomnographic Database), played back at an adjustable speed. Not a live patient feed, not a diagnostic output.',
+    personal: '<b>Your own recording</b> — phone microphone (breathing/snore-sound envelope) and motion sensor only. There is no blood-oxygen, ECG, or EEG signal here, so those fields simply won\'t appear. This is a personal screening/tracking signal, not a diagnosis — see a doctor for a real sleep study if you suspect apnea.',
+  };
+
   function connect() {
     if (ws) { try { ws.close(); } catch (e) {} }
-    LANES.forEach(l => buffers[l].length = 0);
     els.feed.innerHTML = '<div class="empty-feed">Waiting for the first confirmed event…</div>';
     els.statEvents.textContent = '0'; els.statOdi.textContent = '—'; els.statMean.textContent = '—'; els.statMin.textContent = '—';
     paused = false; els.pause.textContent = 'Pause';
@@ -317,6 +345,13 @@
           totalDuration = data.duration_sec;
           els.total.textContent = fmtHMS(totalDuration);
           els.status.textContent = `Streaming ${data.record} — channels: ${data.channels.join(', ')}`;
+          setActiveLanes(data.channels);
+          document.getElementById('banner').innerHTML = BANNER[data.source] || BANNER.physionet;
+          const hasSpo2 = data.channels.includes('spo2');
+          ['stat-odi-wrap', 'stat-mean-wrap', 'stat-min-wrap'].forEach(id => {
+            document.getElementById(id).style.display = hasSpo2 ? '' : 'none';
+          });
+          drawWave();
           break;
         case 'wave':
           LANES.forEach(l => { if (data[l]) pushEnvelope(l, data[l]); });

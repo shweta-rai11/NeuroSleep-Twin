@@ -1,16 +1,19 @@
-"""Live Replay demo server — NOT part of the NeuroSleep Twin application.
+"""Live Replay server — NOT part of the NeuroSleep Twin application.
 
-Answers one question for pitch purposes: "can I show this working live,
-without a PSG device in the room?" It streams a REAL, previously recorded
-MIT-BIH Polysomnographic Database study (PhysioNet) through the project's
-actual event-detection / oxygen / autonomic / EEG feature code
-(backend/app/services/...), chunk by chunk, at an adjustable speed
-multiplier — so a real night's worth of apnea events, fingerprints, and
-recovery dynamics appear on screen as if watching it happen live.
+Two record sources feed the same viewer:
 
-It is a simulated replay of real recorded data, not a live patient feed —
-the frontend says so explicitly, consistent with this project's own
-labeling rules (README "Research Prototype — read this first").
+1. PhysioNet MIT-BIH PSG recordings — a real previously-recorded study,
+   played back at speed for pitch/demo purposes (see start_live_demo.sh).
+2. Your own recordings from personal-sleep-tracker/recorder.html — a phone
+   microphone (breathing/snore-sound envelope) + motion sensor, saved as
+   CSV under personal-sleep-tracker/recordings/. There is no SpO2/ECG/EEG
+   in that case, so oxygen/HR/EEG-derived fields are simply absent — never
+   filled in with invented numbers.
+
+Both sources run through the SAME event-detection / oxygen / autonomic /
+EEG feature code the app itself uses (backend/app/services/...), chunk by
+chunk, at an adjustable speed multiplier, so events and fingerprints
+appear on screen as if watching them happen live.
 
 Standalone on purpose: no Postgres, no Redis, no Celery. Just this process
 plus a browser, so it is one thing that can go wrong instead of five.
@@ -27,6 +30,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import uvicorn
 import wfdb
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -67,6 +71,14 @@ CURATED_RECORDS = [
     {"id": "slp60", "label": "slp60 — 355 min (full night)", "duration_min": 355},
 ]
 DEFAULT_RECORD = CURATED_RECORDS[0]["id"]
+
+PERSONAL_PREFIX = "personal:"
+PERSONAL_DIR = REPO_ROOT / "personal-sleep-tracker" / "recordings"
+PERSONAL_SAMPLE_HZ = 4.0  # matches recorder.html's 250ms sampling interval
+
+# Every channel this server knows how to stream/detect on, in fixed
+# display order. "motion" only ever comes from a personal recording.
+CHANNEL_ORDER = ("eeg", "ecg", "resp", "spo2", "motion")
 
 FINGERPRINT_AXES = ["severity", "duration", "desaturation", "hr_response", "arousal"]
 
@@ -119,9 +131,74 @@ def _pick_channels(sig_names: list[str]) -> dict[str, int]:
     return picked
 
 
+def _list_personal_recordings() -> list[dict]:
+    if not PERSONAL_DIR.exists():
+        return []
+    out = []
+    for csv_path in sorted(PERSONAL_DIR.glob("*.csv"), reverse=True):
+        try:
+            n_rows = sum(1 for _ in csv_path.open()) - 1  # minus header
+        except OSError:
+            continue
+        duration_min = round(n_rows / PERSONAL_SAMPLE_HZ / 60, 1)
+        out.append(
+            {
+                "id": f"{PERSONAL_PREFIX}{csv_path.stem}",
+                "label": f"{csv_path.stem} — {duration_min} min",
+                "duration_min": duration_min,
+                "personal": True,
+            }
+        )
+    return out
+
+
+DETREND_WINDOW_SEC = 4.0  # short enough that a real ~15s+ apnea doesn't get smoothed under detect_events' 10s minimum
+
+
+def _detrend(signal: np.ndarray, fs: float, window_sec: float) -> np.ndarray:
+    """detect_events() looks for drops in *deviation from the signal's own
+    median* — correct for a physiological effort belt, which is AC-coupled
+    and oscillates around zero all night. Microphone RMS is not: it's a
+    strictly positive loudness reading, so its "median" sits inside the
+    normal-breathing range and a silent apnea reads as a LARGER deviation
+    from that median, not a smaller one — backwards from what the detector
+    expects. Subtracting a short rolling mean turns "loudness" into
+    "loudness fluctuation around its own local trend," which does swing
+    around zero on every breath and does go flat during an apnea — the
+    shape the detector was actually built for."""
+    window = max(2, int(fs * window_sec))
+    local_mean = pd.Series(signal).rolling(window=window, min_periods=1, center=True).mean().to_numpy()
+    return (signal - local_mean).astype(np.float32)
+
+
+def _load_personal_recording(record_id: str) -> dict:
+    stem = record_id[len(PERSONAL_PREFIX):]
+    csv_path = PERSONAL_DIR / f"{stem}.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"no recording named {stem} in {PERSONAL_DIR}")
+
+    df = pd.read_csv(csv_path)
+    duration_sec = float(df["t_sec"].iloc[-1])
+    n_samples = int(duration_sec * PERSONAL_SAMPLE_HZ) + 1
+    grid = np.arange(n_samples) / PERSONAL_SAMPLE_HZ
+
+    result: dict = {"fs": PERSONAL_SAMPLE_HZ}
+    # recorder.html samples on a fixed setInterval tick but real device
+    # timing jitters — interpolate onto a strictly uniform grid so the
+    # (fs-in-seconds) window constants in detect_events()/etc. line up.
+    audio = np.interp(grid, df["t_sec"], df["audio_rms"])
+    result["resp"] = _detrend(audio, PERSONAL_SAMPLE_HZ, DETREND_WINDOW_SEC)
+    if "motion_mag" in df.columns:
+        result["motion"] = np.interp(grid, df["t_sec"], df["motion_mag"]).astype(np.float32)
+    return result
+
+
 def load_record(record_id: str) -> dict:
     """Cached after first download so the actual pitch demo never depends
     on the room having internet."""
+    if record_id.startswith(PERSONAL_PREFIX):
+        return _load_personal_recording(record_id)
+
     cache_path = CACHE_DIR / f"{record_id}.npz"
     if cache_path.exists():
         logger.info("loading %s from local cache", record_id)
@@ -157,12 +234,35 @@ def _decimate_envelope(segment: np.ndarray, n_buckets: int) -> list[list[float]]
     return [[round(float(b.min()), 4), round(float(b.max()), 4)] for b in buckets if b.size]
 
 
+MOTION_BASELINE_SEC = 30.0
+MOTION_RESPONSE_SEC = 30.0
+
+
+def _motion_response(motion: np.ndarray, fs: float, onset: float, duration: float) -> dict | None:
+    """Not part of the app's fingerprint definition — there's no ORM/DB
+    concept of a 'motion' response, because the app was designed around
+    physiological sensors, not a phone accelerometer. Reported as its own
+    field so it's never confused with the EEG-derived arousal_probability."""
+    baseline_start = max(0, int((onset - MOTION_BASELINE_SEC) * fs))
+    baseline_end = int(onset * fs)
+    response_start = baseline_end
+    response_end = min(len(motion), int((onset + duration + MOTION_RESPONSE_SEC) * fs))
+    baseline_window = motion[baseline_start:baseline_end]
+    response_window = motion[response_start:response_end]
+    if baseline_window.size == 0 or response_window.size == 0:
+        return None
+    baseline = float(np.mean(baseline_window))
+    response = float(np.mean(response_window))
+    return {"baseline": round(baseline, 4), "response": round(response, 4), "delta": round(response - baseline, 4)}
+
+
 def _build_event_payload(
     candidate: CandidateEvent,
     fs: float,
     ecg: np.ndarray | None,
     eeg: np.ndarray | None,
     spo2_clean: np.ndarray | None,
+    motion: np.ndarray | None = None,
 ) -> dict:
     onset, duration = candidate.onset_sec, candidate.duration_sec
 
@@ -184,6 +284,8 @@ def _build_event_payload(
     if eeg is not None:
         eeg_features = compute_eeg_event_features(eeg, fs, onset, duration)
 
+    movement = _motion_response(motion, fs, onset, duration) if motion is not None else None
+
     fingerprint = fingerprint_vector(
         depth_ratio=candidate.depth_ratio,
         duration_sec=duration,
@@ -201,24 +303,40 @@ def _build_event_payload(
         "oxygen": asdict(oxygen) if oxygen else None,
         "hr": asdict(hr) if hr else None,
         "eeg": asdict(eeg_features) if eeg_features else None,
+        "movement": movement,
         "fingerprint": {"axes": FINGERPRINT_AXES, "values": [round(v, 4) for v in fingerprint]},
     }
 
 
-app = FastAPI(title="NeuroSleep Twin — Live Replay Demo")
+app = FastAPI(title="NeuroSleep Twin — Live Replay")
 
 
 @app.get("/api/records")
 def list_records():
-    return [
-        {**rec, "cached": (CACHE_DIR / f"{rec['id']}.npz").exists()}
+    physionet = [
+        {**rec, "cached": (CACHE_DIR / f"{rec['id']}.npz").exists(), "personal": False}
         for rec in CURATED_RECORDS
     ]
+    return _list_personal_recordings() + physionet
 
 
 @app.get("/", response_class=HTMLResponse)
 def index():
     return FRONTEND_PATH.read_text()
+
+
+RECORDER_PATH = REPO_ROOT / "personal-sleep-tracker" / "recorder.html"
+
+
+@app.get("/recorder", response_class=HTMLResponse)
+def recorder():
+    """Fallback path for the phone recorder if AirDrop/local-file opening
+    doesn't grant microphone access on your phone's browser: open
+    http://<this-computer's-LAN-IP>:8090/recorder from the phone instead.
+    Note this is still plain HTTP, not HTTPS, so some browsers may still
+    block the microphone for a non-localhost origin — see
+    personal-sleep-tracker/README.md for the HTTPS-tunnel fallback."""
+    return RECORDER_PATH.read_text()
 
 
 @app.websocket("/ws/replay")
@@ -243,9 +361,9 @@ async def ws_replay(websocket: WebSocket):
         return
 
     fs = data["fs"]
-    resp, ecg, eeg, spo2 = data.get("resp"), data.get("ecg"), data.get("eeg"), data.get("spo2")
+    eeg, ecg, resp, spo2, motion = (data.get(name) for name in CHANNEL_ORDER)
     if resp is None:
-        await websocket.send_json({"type": "error", "message": f"{record_id} has no respiratory channel"})
+        await websocket.send_json({"type": "error", "message": f"{record_id} has no respiratory/breathing channel"})
         await websocket.close()
         return
 
@@ -253,14 +371,16 @@ async def ws_replay(websocket: WebSocket):
     if spo2 is not None:
         spo2_clean, _artifact_pct = clean_spo2(spo2)
 
+    source = "personal" if record_id.startswith(PERSONAL_PREFIX) else "physionet"
     duration_sec = len(resp) / fs
     await websocket.send_json(
         {
             "type": "ready",
             "record": record_id,
+            "source": source,
             "duration_sec": duration_sec,
             "fs": fs,
-            "channels": [name for name, arr in (("eeg", eeg), ("ecg", ecg), ("resp", resp), ("spo2", spo2)) if arr is not None],
+            "channels": [name for name in CHANNEL_ORDER if data.get(name) is not None],
         }
     )
 
@@ -299,7 +419,7 @@ async def ws_replay(websocket: WebSocket):
                 batch = {"type": "wave", "t": round(sim_time, 2)}
                 span = idx - prev_idx
                 n_buckets = max(1, min(30, span // 4 or 1))
-                for name, arr in (("eeg", eeg), ("ecg", ecg), ("resp", resp), ("spo2", spo2)):
+                for name, arr in zip(CHANNEL_ORDER, (eeg, ecg, resp, spo2, motion)):
                     if arr is None:
                         continue
                     batch[name] = _decimate_envelope(arr[prev_idx:idx], n_buckets)
@@ -320,7 +440,7 @@ async def ws_replay(websocket: WebSocket):
                     continue  # rolling-baseline edge hasn't settled yet — wait for more data
                 emitted.add(key)
                 new_events_this_scan += 1
-                await websocket.send_json(_build_event_payload(candidate, fs, ecg, eeg, spo2_clean))
+                await websocket.send_json(_build_event_payload(candidate, fs, ecg, eeg, spo2_clean, motion))
 
             if new_events_this_scan:
                 state["fast_forward"] = False

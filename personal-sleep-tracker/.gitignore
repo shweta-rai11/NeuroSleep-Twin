@@ -1,0 +1,3 @@
+# Real personal sleep recordings never belong in a public repo.
+recordings/*
+!recordings/.gitkeep

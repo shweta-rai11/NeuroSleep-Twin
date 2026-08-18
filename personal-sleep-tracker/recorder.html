@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sleep Recorder</title>
+<style>
+  :root {
+    --bg: #05070A; --panel: #0D1218; --line: #1C242C; --ink: #C9D3D8; --ink-soft: #6B7A82;
+    --accent: #B8862E; --rec: #A5473D; --ok: #2FA36B; --motion: #4B7BAA;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none; user-select: none;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .wrap { max-width: 480px; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 20px 40px; min-height: 100%; display: flex; flex-direction: column; }
+
+  h1 { font-size: 1.15rem; margin: 0 0 4px; font-weight: 650; }
+  .sub { font-size: 0.8rem; color: var(--ink-soft); line-height: 1.5; margin-bottom: 18px; }
+
+  .notice {
+    border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 3px;
+    padding: 10px 12px; font-size: 0.76rem; color: var(--ink-soft); line-height: 1.5; margin-bottom: 18px;
+  }
+  .notice b { color: var(--ink); }
+
+  .clock { text-align: center; margin: 18px 0; }
+  .clock .t { font-size: 3rem; font-weight: 300; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  .clock .l { font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); margin-top: 2px; }
+
+  .meter-row { display: flex; gap: 10px; margin: 4px 0 22px; }
+  .meter { flex: 1; border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; background: var(--panel); }
+  .meter .l { font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+  .meter .bar-track { height: 6px; border-radius: 3px; background: var(--line); margin-top: 8px; overflow: hidden; }
+  .meter .bar-fill { height: 100%; border-radius: 3px; width: 0%; transition: width 0.12s linear; }
+  .meter.audio .bar-fill { background: var(--accent); }
+  .meter.motion .bar-fill { background: var(--motion); }
+
+  .status { text-align: center; font-size: 0.78rem; color: var(--ink-soft); min-height: 2.4em; margin-bottom: 14px; }
+  .status.err { color: var(--rec); }
+  .status.ok { color: var(--ok); }
+
+  .spacer { flex: 1; }
+
+  button {
+    font: inherit; width: 100%; padding: 17px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); font-size: 1rem; font-weight: 650; cursor: pointer;
+  }
+  button.start { background: var(--ok); border-color: var(--ok); color: #04170D; }
+  button.stop { background: var(--rec); border-color: var(--rec); color: #1A0705; }
+  button:disabled { opacity: 0.4; }
+  button + button { margin-top: 10px; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .setup { display: flex; flex-direction: column; gap: 10px; }
+  .checklist { font-size: 0.78rem; color: var(--ink-soft); line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Sleep Recorder</h1>
+  <div class="sub">Records a breathing-sound envelope (microphone) and movement (motion sensor) all night, on this device only. Nothing is uploaded anywhere.</div>
+
+  <div class="notice">
+    <b>Not a medical device.</b> This does not measure blood oxygen, heart rhythm, or brain activity — the things a real sleep-apnea evaluation needs. It's a personal screening/tracking tool built from sound and movement only. If you suspect sleep apnea, see a doctor about a real sleep study.
+  </div>
+
+  <div id="setup" class="setup">
+    <div class="checklist">
+      Before you start:<br>
+      1. Plug the phone in to charge<br>
+      2. Set brightness low, place it face‑up on the nightstand, mic side toward you — not under the pillow<br>
+      3. Keep this tab open and the screen on (it will try to stay awake automatically)
+    </div>
+    <button class="start" id="start">Start recording</button>
+  </div>
+
+  <div id="recording" style="display:none">
+    <div class="clock">
+      <div class="t mono" id="elapsed">00:00:00</div>
+      <div class="l">recording</div>
+    </div>
+    <div class="meter-row">
+      <div class="meter audio">
+        <div class="l">breathing / sound</div>
+        <div class="bar-track"><div class="bar-fill" id="audio-bar"></div></div>
+      </div>
+      <div class="meter motion">
+        <div class="l">movement</div>
+        <div class="bar-track"><div class="bar-fill" id="motion-bar"></div></div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <button class="stop" id="stop">Stop &amp; save</button>
+  </div>
+
+  <div class="status mono" id="status"></div>
+</div>
+
+<script>
+(function () {
+  const els = {
+    setup: document.getElementById('setup'),
+    recording: document.getElementById('recording'),
+    start: document.getElementById('start'),
+    stop: document.getElementById('stop'),
+    elapsed: document.getElementById('elapsed'),
+    audioBar: document.getElementById('audio-bar'),
+    motionBar: document.getElementById('motion-bar'),
+    status: document.getElementById('status'),
+  };
+
+  const SAMPLE_INTERVAL_MS = 250; // 4 Hz — enough to resolve a breathing-cycle envelope
+  const DB_NAME = 'sleep-recorder';
+  const DB_STORE = 'samples';
+  const CHECKPOINT_EVERY_N = 20; // flush to IndexedDB every ~5s of samples
+
+  let audioCtx = null, analyser = null, timeDomainBuf = null;
+  let latestMotion = 0;
+  let samples = [];      // in-memory: [tSec, audioRms, motionMag]
+  let pending = [];      // not yet flushed to IndexedDB
+  let startedAt = 0;
+  let tickTimer = null;
+  let wakeLock = null;
+  let db = null;
+
+  function setStatus(msg, cls) {
+    els.status.textContent = msg;
+    els.status.className = 'status mono' + (cls ? ' ' + cls : '');
+  }
+
+  function fmtHMS(sec) {
+    sec = Math.max(0, Math.round(sec));
+    const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+    const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+    const s = String(sec % 60).padStart(2, '0');
+    return h + ':' + m + ':' + s;
+  }
+
+  function openDb() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const database = req.result;
+        if (!database.objectStoreNames.contains(DB_STORE)) {
+          database.createObjectStore(DB_STORE, { autoIncrement: true });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function clearDb() {
+    if (!db) return;
+    await new Promise((resolve) => {
+      const tx = db.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).clear();
+      tx.oncomplete = resolve;
+    });
+  }
+
+  async function flushPending() {
+    if (!db || pending.length === 0) return;
+    const rows = pending; pending = [];
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, 'readwrite');
+      const store = tx.objectStore(DB_STORE);
+      for (const row of rows) store.add(row);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function acquireWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+      }
+    } catch (e) { /* not fatal — recording still works, screen just might sleep */ }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && tickTimer) acquireWakeLock();
+  });
+
+  async function requestMotionPermission() {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      const result = await DeviceMotionEvent.requestPermission();
+      return result === 'granted';
+    }
+    return 'DeviceMotionEvent' in window; // Android etc. — no explicit permission step
+  }
+
+  function onDeviceMotion(evt) {
+    const a = evt.accelerationIncludingGravity || evt.acceleration;
+    if (!a) return;
+    const x = a.x || 0, y = a.y || 0, z = a.z || 0;
+    latestMotion = Math.sqrt(x * x + y * y + z * z);
+  }
+
+  async function start() {
+    setStatus('Requesting microphone…');
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      setStatus('Microphone permission denied — recording needs it to work.', 'err');
+      return;
+    }
+
+    const motionOk = await requestMotionPermission();
+    if (!motionOk) {
+      setStatus('Motion permission denied — continuing with audio only.', 'err');
+    }
+    window.addEventListener('devicemotion', onDeviceMotion);
+
+    await acquireWakeLock();
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    timeDomainBuf = new Float32Array(analyser.fftSize);
+    source.connect(analyser);
+
+    try { db = await openDb(); await clearDb(); } catch (e) { db = null; }
+
+    samples = []; pending = [];
+    startedAt = performance.now();
+    els.setup.style.display = 'none';
+    els.recording.style.display = 'block';
+    setStatus('Recording — you can lock nothing, just leave this open and go to sleep.', 'ok');
+
+    tickTimer = setInterval(tick, SAMPLE_INTERVAL_MS);
+  }
+
+  function tick() {
+    analyser.getFloatTimeDomainData(timeDomainBuf);
+    let sumSquares = 0;
+    for (let i = 0; i < timeDomainBuf.length; i++) sumSquares += timeDomainBuf[i] * timeDomainBuf[i];
+    const rms = Math.sqrt(sumSquares / timeDomainBuf.length);
+
+    const tSec = (performance.now() - startedAt) / 1000;
+    const row = [Math.round(tSec * 100) / 100, Math.round(rms * 100000) / 100000, Math.round(latestMotion * 1000) / 1000];
+    samples.push(row);
+    pending.push(row);
+    if (pending.length >= CHECKPOINT_EVERY_N) flushPending();
+
+    els.elapsed.textContent = fmtHMS(tSec);
+    els.audioBar.style.width = Math.min(100, rms * 400) + '%';
+    els.motionBar.style.width = Math.min(100, Math.abs(latestMotion - 9.8) * 20) + '%';
+  }
+
+  async function stop() {
+    clearInterval(tickTimer); tickTimer = null;
+    window.removeEventListener('devicemotion', onDeviceMotion);
+    if (wakeLock) { try { await wakeLock.release(); } catch (e) {} wakeLock = null; }
+    if (audioCtx) { try { await audioCtx.close(); } catch (e) {} }
+    await flushPending();
+
+    setStatus('Saving ' + samples.length + ' samples…');
+    const header = 't_sec,audio_rms,motion_mag\n';
+    const body = samples.map(r => r.join(',')).join('\n');
+    const csv = header + body + '\n';
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sleep-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setStatus(samples.length + ' samples saved as sleep-' + stamp + '.csv — move that file into personal-sleep-tracker/recordings/ on your computer, then open the Live Replay viewer.', 'ok');
+    els.recording.style.display = 'none';
+    els.setup.style.display = 'flex';
+  }
+
+  els.start.addEventListener('click', start);
+  els.stop.addEventListener('click', stop);
+
+  if (!('mediaDevices' in navigator) || !navigator.mediaDevices.getUserMedia) {
+    setStatus('This browser does not support microphone recording. Try Chrome or Safari, opened directly (not inside another app\'s in-app browser).', 'err');
+    els.start.disabled = true;
+  }
+})();
+</script>
+</body>
+</html>

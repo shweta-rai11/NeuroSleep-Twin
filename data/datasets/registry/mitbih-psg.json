@@ -1,0 +1,29 @@
+{
+  "id": "mitbih-psg",
+  "name": "MIT-BIH Polysomnographic Database",
+  "short_description": "Sleep recordings with multiple physiologic signals (ECG, EEG, respiration) from subjects evaluated for obstructive sleep apnea, with beat-by-beat ECG and sleep-stage/apnea annotations.",
+  "source": "PhysioNet",
+  "source_url": "https://physionet.org/content/slpdb/1.0.0/",
+  "doi": "https://doi.org/10.13026/C23K5S",
+  "version": "1.0.0",
+  "published": "1999-08-03",
+  "license": "Open Data Commons Attribution License v1.0",
+  "citation": "Ichimaru Y, Moody GB. Development of the polysomnographic database on CD-ROM. Psychiatry and Clinical Neurosciences 53:175-177 (April 1999).",
+  "num_records": 18,
+  "record_names": [
+    "slp01a", "slp01b", "slp02a", "slp02b", "slp03", "slp04",
+    "slp14", "slp16", "slp32", "slp37", "slp41", "slp45",
+    "slp48", "slp59", "slp60", "slp61", "slp66", "slp67x"
+  ],
+  "signals_summary": "Four, six, or seven-channel recordings including ECG, EEG, and respiration signals. Exact channel list, sampling rate, and units vary per record and must be read from each record's WFDB header at ingestion time — never assumed.",
+  "annotation_types": [
+    { "extension": ".st", "description": "Sleep stage / apnea annotations" },
+    { "extension": ".ecg", "description": "Beat-by-beat ECG annotations" }
+  ],
+  "recommended_use": "Benchmark Lab ground truth for respiratory-event and sleep-stage detection; initial catalog entry for public-dataset exploration mode.",
+  "ingestion_status": "cataloged",
+  "checksum": null,
+  "download_date": null,
+  "_provenance": "Fields above were retrieved from the official PhysioNet record page on 2026-08-18. Per-record signal/sampling details are intentionally left for the ingestion service (Phase 2) to read directly from each record's WFDB header rather than being hand-entered here, so they are always accurate.",
+  "_schema_note": "This file is the seed entry for the dataset registry described in the project README (§10, §42 of the original spec). Additional public datasets are added as sibling JSON files in this directory following the same shape, and must only ever be added from an official, license-clear source."
+}

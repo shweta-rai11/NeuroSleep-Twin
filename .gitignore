@@ -1,0 +1,41 @@
+# --- Python / backend & scientific ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+celerybeat-schedule
+
+# --- Node / frontend ---
+node_modules/
+dist/
+build/
+.vite/
+*.local
+
+# --- Environment & secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Data (never commit raw or user data) ---
+data/uploads/*
+!data/uploads/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/datasets/*/raw/*
+!data/datasets/*/raw/.gitkeep
+data/datasets/*/processed/*
+!data/datasets/*/processed/.gitkeep
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- Logs ---
+*.log

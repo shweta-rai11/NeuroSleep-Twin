@@ -1,6 +1,7 @@
 import type { DatasetEntry } from "@/types/dataset";
 import type {
   BenchmarkResult,
+  BeyondAhiResult,
   EventFeatureResult,
   IngestJob,
   LongitudinalResult,
@@ -86,6 +87,7 @@ export const api = {
   getSleepStages: (studyId: number) => request<SleepStagesResult>(`/studies/${studyId}/sleep-stages`),
   getBrainResponse: (studyId: number) => request<EventFeatureResult>(`/studies/${studyId}/brain-response`),
   getAutonomicResponse: (studyId: number) => request<EventFeatureResult>(`/studies/${studyId}/autonomic-response`),
+  getBeyondAhi: (studyId: number) => request<BeyondAhiResult>(`/studies/${studyId}/beyond-ahi`),
 
   getBenchmark: (studyId: number) => request<BenchmarkResult>(`/studies/${studyId}/benchmark`),
   getLongitudinal: () => request<LongitudinalResult>("/longitudinal"),

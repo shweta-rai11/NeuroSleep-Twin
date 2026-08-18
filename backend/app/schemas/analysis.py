@@ -83,3 +83,22 @@ class SleepStagesOut(BaseModel):
     message: str | None
     epochs: list[StageEpochOut]
     stage_minutes: dict[str, float]
+
+
+class BurdenMetricOut(BaseModel):
+    available: bool
+    value: float | None
+    message: str | None
+
+
+class BeyondAhiOut(BaseModel):
+    study_id: int
+    available: bool
+    message: str | None
+    ahi: BurdenMetricOut | None
+    odi: BurdenMetricOut | None
+    oxygen_time_below_90: BurdenMetricOut | None
+    oxygen_mean_desaturation: BurdenMetricOut | None
+    arousal_burden: BurdenMetricOut | None
+    autonomic_burden: BurdenMetricOut | None
+    recovery_burden: BurdenMetricOut | None

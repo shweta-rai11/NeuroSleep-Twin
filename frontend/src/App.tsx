@@ -6,6 +6,7 @@ import StudyAutonomic from "@/pages/autonomic/StudyAutonomic";
 import BenchmarkLabPage from "@/pages/benchmark-lab";
 import StudyBenchmark from "@/pages/benchmark-lab/StudyBenchmark";
 import BeyondAhiPage from "@/pages/beyond-ahi";
+import StudyBeyondAhi from "@/pages/beyond-ahi/StudyBeyondAhi";
 import BrainResponsePage from "@/pages/brain-response";
 import StudyBrainResponse from "@/pages/brain-response/StudyBrainResponse";
 import ChannelMappingPage from "@/pages/channel-mapping";
@@ -55,6 +56,7 @@ export default function App() {
         <Route path="/autonomic" element={<AutonomicPage />} />
         <Route path="/autonomic/:studyId" element={<StudyAutonomic />} />
         <Route path="/beyond-ahi" element={<BeyondAhiPage />} />
+        <Route path="/beyond-ahi/:studyId" element={<StudyBeyondAhi />} />
         <Route path="/phenotyping" element={<PhenotypingPage />} />
         <Route path="/benchmark-lab" element={<BenchmarkLabPage />} />
         <Route path="/benchmark-lab/:studyId" element={<StudyBenchmark />} />

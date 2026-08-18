@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from app.db.models.study import Study
 from app.db.session import get_db
 from app.schemas.analysis import (
+    BeyondAhiOut,
+    BurdenMetricOut,
     ChannelRef,
     EventFeatureResultOut,
     OxygenBurdenOut,
@@ -15,6 +17,7 @@ from app.schemas.analysis import (
 )
 from app.schemas.benchmarking import BenchmarkOut, ConfusionMatrixOut, CurveOut
 from app.services.benchmarking.epoch_benchmark import compute_epoch_benchmark
+from app.services.beyond_ahi import compute_beyond_ahi
 from app.services.oxygen_burden.analysis import clean_spo2, compute_oxygen_summary
 from app.services.respiratory_events.detector import ALGORITHM_VERSION
 from app.services.respiratory_events.pipeline import (
@@ -171,6 +174,35 @@ def get_benchmark(study_id: int, db: Session = Depends(get_db)) -> BenchmarkOut:
         roc_curve=CurveOut(x=result.roc_fpr, y=result.roc_tpr) if result.roc_fpr else None,
         pr_curve=CurveOut(x=result.pr_recall, y=result.pr_precision) if result.pr_recall else None,
         calibration_predicted=result.calibration_predicted, calibration_observed=result.calibration_observed,
+    )
+
+
+@router.get("/studies/{study_id}/beyond-ahi", response_model=BeyondAhiOut)
+def get_beyond_ahi(study_id: int, db: Session = Depends(get_db)) -> BeyondAhiOut:
+    study = _get_study_or_404(study_id, db)
+    outcome = compute_beyond_ahi(db, study)
+
+    if outcome is None:
+        return BeyondAhiOut(
+            study_id=study_id, available=False,
+            message="No respiratory-effort/airflow channel is mapped for this study — "
+            "confirm channel mapping first if one should be available.",
+            ahi=None, odi=None, oxygen_time_below_90=None, oxygen_mean_desaturation=None,
+            arousal_burden=None, autonomic_burden=None, recovery_burden=None,
+        )
+
+    result, _events = outcome
+
+    def _out(m):
+        return BurdenMetricOut(available=m.available, value=m.value, message=m.message)
+
+    return BeyondAhiOut(
+        study_id=study_id, available=True, message=None,
+        ahi=_out(result.ahi), odi=_out(result.odi),
+        oxygen_time_below_90=_out(result.oxygen_time_below_90),
+        oxygen_mean_desaturation=_out(result.oxygen_mean_desaturation),
+        arousal_burden=_out(result.arousal_burden), autonomic_burden=_out(result.autonomic_burden),
+        recovery_burden=_out(result.recovery_burden),
     )
 
 

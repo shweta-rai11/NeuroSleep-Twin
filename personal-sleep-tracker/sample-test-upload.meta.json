@@ -1,0 +1,7 @@
+{
+  "sampling_rate": 4,
+  "units": {
+    "audio_rms": "rms",
+    "motion_mag": "m/s^2"
+  }
+}

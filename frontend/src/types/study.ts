@@ -129,6 +129,25 @@ export interface SleepStagesResult {
   stage_minutes: Record<string, number>;
 }
 
+export interface BurdenMetric {
+  available: boolean;
+  value: number | null;
+  message: string | null;
+}
+
+export interface BeyondAhiResult {
+  study_id: number;
+  available: boolean;
+  message: string | null;
+  ahi: BurdenMetric | null;
+  odi: BurdenMetric | null;
+  oxygen_time_below_90: BurdenMetric | null;
+  oxygen_mean_desaturation: BurdenMetric | null;
+  arousal_burden: BurdenMetric | null;
+  autonomic_burden: BurdenMetric | null;
+  recovery_burden: BurdenMetric | null;
+}
+
 export interface PhenotypeCluster {
   cluster_index: number;
   label: string;

@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.models.study import Study
 from app.db.session import get_db
 from app.schemas.study import IngestJobOut
@@ -24,6 +25,13 @@ async def upload_study(
     display_name: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> IngestJobOut:
+    if get_settings().demo_mode:
+        raise HTTPException(
+            status_code=403,
+            detail="Uploads are disabled on this public demo instance — there's no per-user "
+            "isolation here, so anyone's upload would be visible to anyone else. Clone the repo "
+            "to run this with your own data: github.com/shweta-rai11/NeuroSleep-Twin",
+        )
     filenames = [f.filename for f in files if f.filename]
     if not filenames:
         raise HTTPException(status_code=400, detail="No files provided.")

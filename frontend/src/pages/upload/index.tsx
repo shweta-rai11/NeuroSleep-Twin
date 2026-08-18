@@ -1,5 +1,5 @@
-import { AlertCircle, FileUp, Loader2, UploadCloud } from "lucide-react";
-import { useRef, useState } from "react";
+import { AlertCircle, FileUp, Loader2, ShieldAlert, UploadCloud } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
@@ -22,6 +22,11 @@ export default function UploadPage() {
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+
+  useEffect(() => {
+    api.health().then((h) => setDemoMode(h.demo_mode)).catch(() => undefined);
+  }, []);
 
   function addFiles(fileList: FileList | File[]) {
     const incoming = Array.from(fileList);
@@ -86,7 +91,18 @@ export default function UploadPage() {
         best, not a finding: quiet normal breathing and a real pause can sound identical.
       </p>
 
-      <Card className="mt-4">
+      {demoMode && (
+        <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Uploads are turned off on this public demo — there's no per-user isolation here, so
+            anyone's data would be visible to anyone else. Explore the Public Datasets page
+            instead, or clone the repo to run this with your own data.
+          </span>
+        </div>
+      )}
+
+      <Card className={`mt-4 ${demoMode ? "pointer-events-none opacity-50" : ""}`}>
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -173,7 +189,9 @@ export default function UploadPage() {
         </button>
       </Card>
 
-      <AppleHealthImport />
+      <div className={demoMode ? "pointer-events-none opacity-50" : ""}>
+        <AppleHealthImport />
+      </div>
     </div>
   );
 }

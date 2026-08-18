@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session as DbSession
 
+from app.core.config import get_settings
 from app.db.models.study import Study
 from app.db.session import get_db
 from app.schemas.apple_health import ScanResultOut, SleepSessionOut
@@ -15,9 +16,17 @@ from app.services.ingestion.apple_health import (
 
 router = APIRouter(tags=["apple-health"])
 
+_DEMO_MODE_MESSAGE = (
+    "Apple Health import is disabled on this public demo instance — there's no per-user "
+    "isolation here, so anyone's health export would be visible to anyone else. Clone the "
+    "repo to run this with your own data: github.com/shweta-rai11/NeuroSleep-Twin"
+)
+
 
 @router.post("/apple-health/scan", response_model=ScanResultOut)
 async def scan_apple_health_export(file: UploadFile = File(...)) -> ScanResultOut:
+    if get_settings().demo_mode:
+        raise HTTPException(status_code=403, detail=_DEMO_MODE_MESSAGE)
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided.")
     content = await file.read()
@@ -42,6 +51,8 @@ async def scan_apple_health_export(file: UploadFile = File(...)) -> ScanResultOu
 
 @router.post("/apple-health/{source_id}/import/{session_index}", response_model=StudyOut)
 def import_apple_health_night(source_id: str, session_index: int, db: DbSession = Depends(get_db)) -> Study:
+    if get_settings().demo_mode:
+        raise HTTPException(status_code=403, detail=_DEMO_MODE_MESSAGE)
     result = scan_sleep_sessions(source_id)
     session = next((s for s in result.sessions if s.index == session_index), None)
     if session is None:

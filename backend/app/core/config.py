@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # extra setup — set this before exposing the API beyond localhost.
     api_auth_token: str = ""
 
+    # Public read-only demo instance: no per-user accounts exist, so anyone
+    # who can reach the API can see anyone else's upload — real uploads are
+    # refused rather than pretending that's private. Also makes Celery run
+    # tasks in-process (see worker/celery_app.py) since a single free web
+    # dyno has no separate worker process or Redis broker to talk to.
+    demo_mode: bool = False
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

@@ -13,4 +13,5 @@ def health_check() -> dict:
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.environment,
+        "demo_mode": settings.demo_mode,
     }

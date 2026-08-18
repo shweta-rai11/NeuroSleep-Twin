@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: neurosleep-twin-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_NAME
+        value: "NeuroSleep Twin API"
+      - key: ENVIRONMENT
+        value: production
+      - key: DEMO_MODE
+        value: "true"
+      - key: CORS_ORIGINS
+        sync: false # set to your Vercel frontend URL, e.g. https://neurosleep-twin.vercel.app
+      - key: DATABASE_URL
+        sync: false # Neon (or any Postgres) connection string, postgresql+psycopg2://...
+      - key: OLLAMA_MODEL
+        value: "" # no Ollama on a free web dyno — empty skips straight to the template-answer fallback
+      - key: ANTHROPIC_API_KEY
+        sync: false # optional: set to let the Research Assistant call a real model instead of the template fallback
+      - key: API_AUTH_TOKEN
+        sync: false # leave blank for a public read-only demo; set it if you want the demo gated too

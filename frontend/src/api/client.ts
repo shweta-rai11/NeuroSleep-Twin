@@ -17,8 +17,10 @@ import type {
   StudyQc,
 } from "@/types/study";
 
-// Vite dev server proxies /api -> the FastAPI backend (see vite.config.ts).
-const API_BASE = "/api/v1";
+// Vite dev server proxies /api -> the FastAPI backend (see vite.config.ts), so
+// a relative path is enough locally. A split deploy (e.g. frontend on Vercel,
+// backend elsewhere) has no such proxy and needs the backend's real origin.
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) || "/api/v1";
 
 // Must match the backend's API_AUTH_TOKEN (see backend/.env.example). Empty
 // in both places means auth is disabled — fine for zero-friction local dev.
@@ -58,6 +60,7 @@ export interface HealthStatus {
   status: string;
   service: string;
   environment: string;
+  demo_mode: boolean;
 }
 
 export const api = {
